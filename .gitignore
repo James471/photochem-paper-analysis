@@ -1,0 +1,26 @@
+# Machine-specific paths (copy config.example.yaml)
+config.yaml
+
+# Data and outputs: reduced data moves by rsync (sync.py), figures are rebuilt by `plot`
+results/
+figures/*.pdf
+test_figures/
+
+# LaTeX build products (fig_flowchart.tex)
+figures/*.aux
+figures/*.fdb_latexmk
+figures/*.fls
+figures/*.log
+figures/*.synctex.gz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,74 @@
+# Per-machine settings for the figure scripts. Copy to config.yaml (not tracked by git) and set your paths.
+# Host is auto-detected (PAWSEY_CLUSTER=setonix -> setonix, gadi-* -> gadi, otherwise local); override with PHOTOCHEM_HOST.
+# `builds` entries may be absolute or relative to `quokka`.
+# `configure` runs: cmake -S <quokka> -B <build> <cmake_args> -DAMReX_SPACEDIM=<dim>, after sourcing
+# <quokka>/<env_script> if set.
+
+# Every paper figure is generated from this Quokka commit (the default Run.branch/Run.commit): the source is a detached worktree
+# quokka-<commit[:9]> next to each host's `quokka`, and each host's `runs` root gets a sub-directory <commit[:9]>.
+# Keep these values: they define the code the paper used.
+paper:
+  branch: james471/photochem-paper
+  commit: 295c78f90ef2b5978a369b548fa5924595fabce5
+
+figures: figures                                  # where `plot` writes the PDFs (relative to this repo, or absolute)
+
+hosts:
+  local:                                          # the machine you plot on (any machine that is not Setonix or Gadi)
+    quokka: /path/to/quokka                       # a clone of github.com/quokka-astro/quokka that has the commit above
+    builds: {1d: build/paper-1d, 3d: build/paper-3d}   # relative to quokka
+    runs: /path/to/runs                           # raw simulation output
+    cmake_args: [-G Ninja, -DCMAKE_BUILD_TYPE=Release, -DQUOKKA_PYTHON=ON]
+    build_jobs: 8
+    venv: .venv                                   # relative to this repo
+    ntasks: 4                                     # MPI ranks for local runs
+
+  setonix:                                        # Pawsey Setonix (AMD MI250X GPUs)
+    ssh: setonix                                  # ssh alias used by sync.py on the local machine
+    repo: /path/on/setonix/to/this/repo
+    quokka: /path/on/setonix/to/quokka
+    builds: {3d: /path/on/setonix/to/build3d}     # absolute: pinned builds get -<commit[:9]>
+    env_script: scripts/hpc_profiles/setonix-gpu.profile    # relative to quokka
+    cmake_args: [-DCMAKE_BUILD_TYPE=Release, -DAMReX_GPU_BACKEND=HIP, -DQUOKKA_PYTHON=ON, "-DHDF5_ROOT=$PAWSEY_HDF5_HOME"]
+    build_jobs: 32
+    runs: /path/on/setonix/to/runs
+    venv: /path/on/setonix/to/venv
+    python_module: cray-python/3.11.7
+    account: your-project                         # Slurm account; "-gpu" is appended for GPU partitions
+    ntasks: 128                                   # cpu (work partition) runs
+
+  gadi:                                           # NCI Gadi (NVIDIA GPUs, PBS)
+    ssh: gadi
+    repo: /path/on/gadi/to/this/repo
+    quokka: /path/on/gadi/to/quokka
+    builds: {3d: build/3d-cuda}
+    env_script: /path/on/gadi/to/environment.profile   # modules for the CUDA build
+    cmake_args: [-DCMAKE_BUILD_TYPE=Release, -DAMReX_GPU_BACKEND=CUDA, "-DCMAKE_CUDA_ARCHITECTURES='80;90'", -DQUOKKA_PYTHON=OFF]
+    build_jobs: 16
+    runs: /path/on/gadi/to/runs
+    venv: /path/on/gadi/to/venv
+    python_module: python3/3.12.1
+    project: your-project                         # PBS project to charge
+    # login-node processes are killed at logout: `build` configures on the login node, then compiles in one job of this queue
+    build_queue: {queue: normal, ncpus: 48, mem: 190GB, time: "02:00:00"}
+    queues:                                       # per-node resources requested for PBS jobs (one rank per GPU)
+      gpuhopper: {ncpus: 48, ngpus: 4, mem: 1000GB, jobfs: 800GB}
+      dgxa100: {ncpus: 128, ngpus: 8, mem: 1000GB, jobfs: 400GB}
+
+# Matplotlib defaults (AASTeX twocolumn: column 3.39 in, page 7.1 in)
+style:
+  column_width: 3.39
+  page_width: 7.1
+  font_size: 8
+  dpi: 300
+  rc:
+    font.family: serif
+    mathtext.fontset: dejavuserif
+    axes.linewidth: 0.6
+    lines.linewidth: 1.0
+    legend.frameon: false
+    xtick.direction: in
+    ytick.direction: in
+    xtick.top: true
+    ytick.right: true
+    savefig.bbox: tight
