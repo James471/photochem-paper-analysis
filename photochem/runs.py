@@ -2,12 +2,11 @@ import datetime
 import json
 import shlex
 import shutil
-import socket
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .build import build_dir, built_executable, env_script, source_dir, variant_dir
+from .build import build_dir, built_executable, source_dir, variant_dir
 from .config import ANALYSIS, PAPER_BRANCH, PAPER_COMMIT, host, load_config
 from .source import dirty, resolve
 
@@ -32,12 +31,11 @@ class Run:
 	env: str = ""  # environment script (relative to this repository) for build and run, instead of the host's `env_script`
 	cmake_args: list = field(default_factory=list)  # extra configure-time flags, e.g. "-DFOO=1"; needs its own `variant` or `build`
 	variant: str = ""  # name of the cmake_args set; built in the shared build dir, executable kept in <build dir>/variants/<variant>
-	ntasks: int = 0  # MPI ranks for local / cpu runs; 0 = host default
+	ntasks: int = 0  # MPI ranks for local runs; 0 = host default
 	host: str = ""  # machine this run belongs to ("" = any); configure/build/run/reduce skip it elsewhere
 	runs: str = ""  # runs root override (absolute), e.g. on another project's /scratch
-	# Setonix job settings (gpu-dev: <= 2 nodes, <= 4 h).
-	# "login": Setonix login node, no Slurm (serial runs started with nohup by `run --batch`)
-	partition: str = "gpu-dev"  # gpu-dev | gpu | work | login
+	# Setonix job settings (gpu-dev: <= 2 nodes, <= 4 h)
+	partition: str = "gpu-dev"  # gpu-dev | gpu
 	nodes: int = 1
 	# GPUs: 0 = whole nodes, 1 = one GCD (one rank), which is also what `run --batch` uses.
 	ngpus: int = 0
@@ -125,11 +123,7 @@ def prepare(figure, run, force=False):
 			cmd.append(f"max_walltime={stop // 3600:02d}:{stop % 3600 // 60:02d}:{stop % 60:02d}")
 		cmd.append(f"checkpoint_interval={CHAIN_CHECKPOINT_INTERVAL}")
 	meta["command"] = cmd
-	if run.partition == "login":
-		env = env_script(run, hcfg)
-		source = f"source {shlex.quote(str(env))} > /dev/null 2>&1\n" if env else ""
-		(rdir / "launch.sh").write_text(f"#!/bin/bash\ncd \"$(dirname \"$0\")\"\n{source}export OMP_NUM_THREADS=1\n{shlex.join(cmd)} > run.log 2>&1\n")
-	elif host() == "setonix":
+	if host() == "setonix":
 		(rdir / "job.sbatch").write_text(_sbatch(figure, run, hcfg, cmd))
 	else:
 		launch = f"mpirun -n {run.ntasks or hcfg['ntasks']} " + shlex.join(cmd)
@@ -146,23 +140,22 @@ def _check_gpu_dev(name, partition, nodes, time):
 
 
 def _sbatch(figure, run, hcfg, cmd):
-	gpu = run.partition.startswith("gpu")
+	if not run.partition.startswith("gpu"):
+		raise SystemExit(f"{run.name}: Setonix runs use a gpu partition (got {run.partition})")
 	_check_gpu_dev(run.name, run.partition, run.nodes, run.time)
-	if gpu and run.ngpus:
+	if run.ngpus:
 		if run.ngpus != 1 or run.nodes != 1:
 			raise SystemExit(f"{run.name}: on Setonix ngpus is 0 (whole nodes) or 1 (one GCD)")
 		if run.chain:
 			raise SystemExit(f"{run.name}: chained runs on Setonix need whole nodes (ngpus = 0)")
 		return _sbatch_gcd(f"{figure}.{run.name}", run, hcfg, f"run {shlex.quote(str(run_dir(figure, run, hcfg)))} {shlex.join(cmd)}")
-	if run.chain and not gpu:
-		raise SystemExit(f"{run.name}: chained runs on Setonix are GPU only")
-	template = (ANALYSIS / "slurm" / ("setonix-gpu.sbatch" if gpu else "setonix-cpu.sbatch")).read_text()
+	template = (ANALYSIS / "slurm" / "setonix-gpu.sbatch").read_text()
 	fields = {
 		"PARTITION": run.partition,
-		"ACCOUNT": hcfg["account"] + ("-gpu" if gpu else ""),
+		"ACCOUNT": hcfg["account"] + "-gpu",
 		"JOB_NAME": f"{figure}.{run.name}",
 		"NODES": str(run.nodes),
-		"NTASKS": str(run.nodes * 8 if gpu else run.ntasks or hcfg["ntasks"]),
+		"NTASKS": str(run.nodes * 8),
 		"TIME": run.time,
 		"QUOKKA": hcfg["quokka"],
 		"COMMAND": shlex.join(cmd),
@@ -191,9 +184,8 @@ def _sbatch_gcd(job_name, run, hcfg, runs, log="slurm-%j.out", time=None):
 
 
 def submit_batch(figure, runs, time):
-	"""Run the (prepared) `runs` one after another, skipping finished ones, in one single-GCD job on a Setonix gpu partition or,
-	for partition "login", in one nohup process on this Setonix login node. The script goes to
-	<runs>/<figure>/_batches/<timestamp>.{sbatch,sh}; its job id (or pid) is recorded in each run.json."""
+	"""Run the (prepared) `runs` one after another, skipping finished ones, in one single-GCD job on a Setonix gpu partition. The
+	script goes to <runs>/<figure>/_batches/<timestamp>.sbatch; its job id is recorded in each run.json."""
 	_, hcfg = load_config()
 	if len({(r.partition, r.runs, r.env) for r in runs}) > 1:
 		raise SystemExit("batched runs must share partition, runs root and environment")
@@ -206,17 +198,7 @@ def submit_batch(figure, runs, time):
 	bdir.mkdir(parents=True, exist_ok=True)
 	stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 	record = {}
-	if run0.partition == "login":
-		if host() != "setonix":
-			raise SystemExit("partition 'login' is a Setonix login node")
-		script = bdir / f"{stamp}.sh"
-		env = env_script(run0, hcfg)
-		script.write_text(_fill("setonix-login.sh", {"ENV_SCRIPT": str(env) if env else "/dev/null", "RUNS": "\n".join(lines)}))
-		with open(bdir / f"{stamp}.out", "w") as log:
-			proc = subprocess.Popen(["nohup", "bash", str(script)], cwd=bdir, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-		record["pid"], record["login_node"] = proc.pid, socket.gethostname()
-		jobid = f"pid {proc.pid} on {record['login_node']}"
-	elif host() == "setonix":
+	if host() == "setonix":
 		_check_gpu_dev("batch", run0.partition, 1, time)
 		script = bdir / f"{stamp}.sbatch"
 		script.write_text(_sbatch_gcd(f"{figure}.batch", run0, hcfg, "\n".join(lines), log=str(bdir / f"{stamp}-%j.out"), time=time))
@@ -231,13 +213,6 @@ def submit_batch(figure, runs, time):
 		meta.update(record, batch=str(script), launched=datetime.datetime.now().isoformat(timespec="seconds"))
 		path.write_text(json.dumps(meta, indent=2) + "\n")
 	return jobid, script
-
-
-def _fill(template, fields):
-	text = (ANALYSIS / "slurm" / template).read_text()
-	for key, value in fields.items():
-		text = text.replace(f"@{key}@", value)
-	return text
 
 
 def launch(rdir):
@@ -261,10 +236,6 @@ def state(rdir):
 	meta = json.loads((rdir / "run.json").read_text())
 	if finished(rdir):
 		return "finished"
-	if "login_node" in meta:
-		alive = subprocess.run(["ps", "-p", str(meta["pid"])], capture_output=True).returncode == 0 if socket.gethostname() == meta["login_node"] else None
-		ran = "started" if (rdir / "run.log").exists() else "waiting"
-		return f"pid {meta['pid']} on {meta['login_node']}: " + ({True: f"batch running, run {ran}", False: "batch ended, run unfinished"}.get(alive, f"run {ran} (check on that node)"))
 	if "jobid" in meta and (rdir / "chain.log").exists():  # chained jobs log every start/exit/resubmission in chain.log
 		chain = (rdir / "chain.log").read_text().strip().splitlines()
 		jobs = [meta["jobid"], *(line.split()[-1] for line in chain if line.startswith("Submitted batch job"))]

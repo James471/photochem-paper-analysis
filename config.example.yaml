@@ -34,8 +34,7 @@ hosts:
     runs: /path/on/setonix/to/runs
     venv: /path/on/setonix/to/venv
     python_module: cray-python/3.11.7
-    account: your-project                         # Slurm account; "-gpu" is appended for GPU partitions
-    ntasks: 128                                   # cpu (work partition) runs
+    account: your-project                         # Slurm account; "-gpu" is appended
 
 # Matplotlib defaults (AASTeX twocolumn: column 3.39 in, page 7.1 in)
 style:

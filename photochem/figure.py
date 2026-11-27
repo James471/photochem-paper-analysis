@@ -58,8 +58,8 @@ def main(figure, runs, reduce, plot, setup=None, equivalent=None):
 	p_run.add_argument(
 		"--batch",
 		metavar="TIME",
-		help="run the selected runs one after another, one batch per partition: a single-GCD Setonix job of walltime TIME "
-		"or a nohup process on the Setonix login node (partition 'login'); already-prepared runs are reused (unless --force)",
+		help="run the selected runs one after another, one batch per partition: a single-GCD Setonix job of walltime TIME; "
+		"already-prepared runs are reused (unless --force)",
 	)
 	p_red = sub.add_parser("reduce", help="reduce raw output into results/<figure>/<run>/")
 	p_red.add_argument("names", nargs="*")
