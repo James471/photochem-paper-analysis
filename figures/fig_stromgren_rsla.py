@@ -102,7 +102,7 @@ RUNS = [
 	# one GCD (8 boxes of 64^3), which the gpu queue starts sooner: 15 s and 125 s on a whole node
 	rsla(1000, "c1000_ctr", ngpus=1, partition="gpu", time="00:30:00"),
 	rsla(100, "c100_ctr", ngpus=1, partition="gpu", time="00:30:00"),
-	rsla(10, "c10_ctr", partition="gpu", time="01:30:00"),
+	rsla(10, "c10_ctr", partition="gpu", time="00:30:00"),  # ~21 min
 	rsla(1, "c1_ctr", extra=["max_timesteps=10000000"], partition="gpu-dev", time="04:00:00", chain=1),
 ]
 SNAPSHOT_RUN = "c1_ctr"  # stromgren_snapshot.pdf (paper Fig. stromgren_snapshot)

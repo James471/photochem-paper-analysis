@@ -123,7 +123,7 @@ def dtype(n, max_grid_size, extra=(), name=None, plotfile_interval=10, problem="
 
 RUNS = [
 	# The source in the middle of [-6 r_s, 6 r_s]^3, 128^3 in 8 boxes of 64^3, one per GCD of one node
-	dtype(128, 64, name="c128", host="setonix", partition="gpu", time="00:30:00"),
+	dtype(128, 64, name="c128", host="setonix", partition="gpu", time="00:10:00"),  # ~7 min
 ]
 
 COLORS = {"c128": "#0173B2"}
