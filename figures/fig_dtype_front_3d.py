@@ -180,7 +180,7 @@ def dtype3d(n, extra=(), name=None, plotfile_interval=10, **kwargs):
 
 RUNS = [
 	# Production run: 64^3 + 2 levels (256^3 effective), refined on the x_HI gradient only. One node, 8 GCDs.
-	dtype3d(64, name="n64_l2", extra=["amr.max_level=2"], host="setonix", time="02:00:00"),
+	dtype3d(64, name="n64_l2", extra=["amr.max_level=2"], host="setonix", partition="gpu", time="00:30:00"),  # ~7 min
 ]
 
 COLORS = {"n64_l2": "#0173B2"}
