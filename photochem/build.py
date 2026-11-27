@@ -1,4 +1,3 @@
-import datetime
 import shlex
 import subprocess
 from pathlib import Path
@@ -107,54 +106,11 @@ def _build_cmd(bdir, variant, group, hcfg, jobs):
 
 def build(runs):
 	"""Build every run's target, configuring first any build dir without a CMakeCache (or with run-specific cmake_args, for a run
-	with its own build dir). Variants are built one after another in their shared build dir. On a host with `build_queue` (Gadi:
-	login-node processes are killed), configure here and compile in one batch job; returns its id."""
+	with its own build dir). Variants are built one after another in their shared build dir."""
 	_, hcfg = load_config()
 	groups = _by_dir(runs, hcfg)
 	for (bdir, variant), group in groups.items():
 		if not (bdir / "CMakeCache.txt").exists() or (group[0].cmake_args and not variant):
 			configure(group[:1])
-	if "build_queue" in hcfg:
-		return _submit_build(groups, hcfg)
 	for (bdir, variant), group in groups.items():
 		_shell(_build_cmd(bdir, variant, group, hcfg, hcfg.get("build_jobs", 8)), group[0], hcfg)
-	return None
-
-
-def _submit_build(groups, hcfg):
-	from .runs import storage  # avoid a circular import
-
-	queue = hcfg["build_queue"]
-	lines = []
-	for (bdir, variant), group in groups.items():
-		env = env_script(group[0], hcfg)
-		lines += [f"source {shlex.quote(str(env))} > /dev/null 2>&1" if env else "", f"bash -c {shlex.quote(_build_cmd(bdir, variant, group, hcfg, queue['ncpus']))} || exit 1"]
-	bdirs = sorted({bdir for bdir, _ in groups})
-	stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-	jdir = Path(hcfg["runs"]) / "_builds"
-	jdir.mkdir(parents=True, exist_ok=True)
-	script = jdir / f"{stamp}.pbs"
-	script.write_text(
-		"\n".join(
-			[
-				"#!/bin/bash",
-				f"#PBS -P {hcfg['project']}",
-				f"#PBS -q {queue['queue']}",
-				"#PBS -N quokka-build",
-				f"#PBS -l ncpus={queue['ncpus']}",
-				f"#PBS -l mem={queue['mem']}",
-				f"#PBS -l walltime={queue['time']}",
-				"#PBS -l jobfs=20GB",
-				f"#PBS -l storage={storage([hcfg['quokka'], *bdirs, *(env_script(g[0], hcfg) or hcfg['quokka'] for g in groups.values())])}",
-				"#PBS -j oe",
-				f"#PBS -o {jdir / stamp}.log",
-				"module purge",
-				*lines,
-				"",
-			]
-		)
-	)
-	out = subprocess.run(["qsub", str(script)], cwd=jdir, capture_output=True, text=True, check=True)
-	jobid = out.stdout.strip()
-	print(f"submitted build job {jobid}: {script} (log {jdir / stamp}.log)")
-	return jobid

@@ -15,9 +15,12 @@ cp config.example.yaml config.yaml   # then set your paths: Quokka clone, run di
 `quokka` in `config.yaml` must be a clone of Quokka that has the pinned commit. The scripts build from a detached worktree
 `quokka-<commit>` next to it, so the clone itself is never changed.
 
-## One script per figure
+## Figure scripts
 
-| Script | Paper figure(s) | Where it runs |
+Each script covers one test problem. It runs that problem's simulations and makes every paper figure drawn from them, so some
+scripts write several PDFs.
+
+| Script | PDFs it writes | Where it runs |
 |---|---|---|
 | `figures/fig_flowchart.py` | `fig_flowchart.pdf` | no simulation (TikZ) |
 | `figures/fig_onezone_photoionization.py` | `onezone_species_photons.pdf`, `onezone_errors.pdf` | local, seconds (needs Julia) |
@@ -29,9 +32,10 @@ cp config.example.yaml config.yaml   # then set your paths: Quokka clone, run di
 | `figures/fig_dtype_front_he.py` | `dtype_front_he_snapshot.pdf` | GPU |
 | `figures/fig_dtype_front_3d.py` | `dtype_front_3d_snapshot.pdf`, `dtype_front_3d_radius.pdf` | GPU |
 
-`fig_integrator_study.py` and `fig_tolerance_choice.py` hold helpers for the tolerance and integrator figures.
+`fig_integrator_study.py` and `fig_tolerance_choice.py` make no figure: they hold helpers for `fig_tolerance_scaled.py` and
+`fig_integrator_choice.py`.
 
-Each script declares its runs (`RUNS`) and has the stages
+Each figure script declares its runs (`RUNS`) and has the stages
 
 ```bash
 python figures/fig_x.py configure|build [RUN ...]   # cmake / build at the pinned commit
@@ -41,6 +45,7 @@ python figures/fig_x.py plot                        # results -> <figures>/<name
 python figures/fig_x.py status
 ```
 
-Runs, builds and job scripts for Setonix (Slurm) and Gadi (PBS) are handled by `photochem/`; the job templates are in `slurm/`.
+Runs, builds and Slurm job scripts for Pawsey's Setonix (AMD MI250X GPUs) are handled by `photochem/`; the job templates are in
+`slurm/`. Runs on the local machine use `mpirun`.
 `sync.py` runs a command in a cluster's copy of this repository (`sync.py remote -- python figures/fig_x.py reduce`) and copies
 the reduced results back (`sync.py pull <figure>`).

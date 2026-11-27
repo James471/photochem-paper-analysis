@@ -22,8 +22,6 @@ def host():
 		return name
 	if os.environ.get("PAWSEY_CLUSTER") == "setonix" or re.match(r"(setonix|nid)\d*", socket.gethostname()):
 		return "setonix"
-	if socket.gethostname().startswith("gadi-"):
-		return "gadi"
 	return "local"
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Move data/commands between the Mac and a cluster (run on the Mac). Setonix by default; `--host gadi` (before the
-subcommand) for Gadi.
+"""Move data/commands between the local machine and a cluster (run locally). Setonix by default; `--host H` (before the
+subcommand) for another `hosts` entry of config.yaml.
 
     python sync.py [--host H] pull [FIGURE]           # rsync reduced results/ from the cluster's repo
     python sync.py [--host H] raw FIGURE RUN [-n]     # rsync one raw run directory from the cluster

@@ -1,4 +1,3 @@
-import dataclasses
 import datetime
 import json
 import shlex
@@ -36,16 +35,14 @@ class Run:
 	ntasks: int = 0  # MPI ranks for local / cpu runs; 0 = host default
 	host: str = ""  # machine this run belongs to ("" = any); configure/build/run/reduce skip it elsewhere
 	runs: str = ""  # runs root override (absolute), e.g. on another project's /scratch
-	project: str = ""  # Gadi project to charge ("" = the host's `project`)
-	# Setonix job settings (gpu-dev: <= 2 nodes, <= 4 h); on Gadi `partition` is the PBS queue (a key of the host's `queues`).
+	# Setonix job settings (gpu-dev: <= 2 nodes, <= 4 h).
 	# "login": Setonix login node, no Slurm (serial runs started with nohup by `run --batch`)
-	partition: str = "gpu-dev"  # gpu-dev | gpu | work | login | gpursaa | gpuhopper
+	partition: str = "gpu-dev"  # gpu-dev | gpu | work | login
 	nodes: int = 1
-	# GPUs for a single-node job using part of a node; 0 = whole nodes. Gadi: cpus/mem/jobfs scale with it. Setonix: only 1 (one GCD,
-	# one rank), which is also what `run --batch` uses.
+	# GPUs: 0 = whole nodes, 1 = one GCD (one rank), which is also what `run --batch` uses.
 	ngpus: int = 0
 	time: str = "01:00:00"
-	# Gadi, and Setonix whole-node GPU jobs: resubmit up to `chain` more times, each continuing from the newest checkpoint, until
+	# Setonix whole-node GPU jobs: resubmit up to `chain` more times, each continuing from the newest checkpoint, until
 	# the run reaches its end time. Adds max_walltime (10 min short of `time`, unless overridden) and checkpoint_interval overrides
 	# so each job ends on a checkpoint. Quokka stops at max(0.9 max_walltime, max_walltime - 5 min).
 	chain: int = 0
@@ -134,8 +131,6 @@ def prepare(figure, run, force=False):
 		(rdir / "launch.sh").write_text(f"#!/bin/bash\ncd \"$(dirname \"$0\")\"\n{source}export OMP_NUM_THREADS=1\n{shlex.join(cmd)} > run.log 2>&1\n")
 	elif host() == "setonix":
 		(rdir / "job.sbatch").write_text(_sbatch(figure, run, hcfg, cmd))
-	elif host() == "gadi":
-		(rdir / "job.pbs").write_text(_pbs(figure, run, hcfg, cmd, [exe, rdir]))
 	else:
 		launch = f"mpirun -n {run.ntasks or hcfg['ntasks']} " + shlex.join(cmd)
 		(rdir / "launch.sh").write_text(f"#!/bin/bash\ncd \"$(dirname \"$0\")\"\n{launch} > run.log 2>&1\n")
@@ -196,12 +191,12 @@ def _sbatch_gcd(job_name, run, hcfg, runs, log="slurm-%j.out", time=None):
 
 
 def submit_batch(figure, runs, time):
-	"""Run the (prepared) `runs` one after another, skipping finished ones, in one single-GPU job (Setonix: one GCD on a gpu
-	partition; Gadi: one GPU of the runs' queue) or, for partition "login", in one nohup process on this Setonix login node. The
-	script goes to <runs>/<figure>/_batches/<timestamp>.{sbatch,pbs,sh}; its job id (or pid) is recorded in each run.json."""
+	"""Run the (prepared) `runs` one after another, skipping finished ones, in one single-GCD job on a Setonix gpu partition or,
+	for partition "login", in one nohup process on this Setonix login node. The script goes to
+	<runs>/<figure>/_batches/<timestamp>.{sbatch,sh}; its job id (or pid) is recorded in each run.json."""
 	_, hcfg = load_config()
-	if len({(r.partition, r.runs, r.env, r.project) for r in runs}) > 1:
-		raise SystemExit("batched runs must share partition, runs root, environment and project")
+	if len({(r.partition, r.runs, r.env) for r in runs}) > 1:
+		raise SystemExit("batched runs must share partition, runs root and environment")
 	run0 = runs[0]
 	lines = []
 	for run in runs:
@@ -227,15 +222,8 @@ def submit_batch(figure, runs, time):
 		script.write_text(_sbatch_gcd(f"{figure}.batch", run0, hcfg, "\n".join(lines), log=str(bdir / f"{stamp}-%j.out"), time=time))
 		out = subprocess.run(["sbatch", "--parsable", str(script)], cwd=bdir, capture_output=True, text=True, check=True)
 		jobid = record["jobid"] = out.stdout.strip().split(";")[0]
-	elif host() == "gadi":
-		script = bdir / f"{stamp}.pbs"
-		batch = dataclasses.replace(run0, name="batch", nodes=1, ngpus=run0.ngpus or 1, time=time)
-		fields = _pbs_fields(figure, batch, hcfg, [*(run_dir(figure, r, hcfg) for r in runs), *(executable(r, hcfg) for r in runs)])
-		script.write_text(_fill("gadi-gpu-batch.pbs", {**fields, "LOG": str(bdir / f"{stamp}.out"), "RUNS": "\n".join(lines)}))
-		out = subprocess.run(["qsub", str(script)], cwd=bdir, capture_output=True, text=True, check=True)
-		jobid = record["jobid"] = out.stdout.strip()
 	else:
-		raise SystemExit(f"--batch is for Setonix and Gadi, not {host()}")
+		raise SystemExit(f"--batch is for Setonix, not {host()}")
 	for run in runs:
 		path = run_dir(figure, run, hcfg) / "run.json"
 		meta = json.loads(path.read_text())
@@ -252,59 +240,12 @@ def _fill(template, fields):
 	return text
 
 
-def storage(paths):
-	"""PBS -l storage value covering every /g/data/<p> and /scratch/<p> path the job touches."""
-	mounts = set()
-	for path in paths:
-		parts = Path(path).parts
-		if len(parts) < 4:
-			continue
-		if parts[1:3] == ("g", "data"):
-			mounts.add(f"gdata/{parts[3]}")
-		elif parts[1] == "scratch":
-			mounts.add(f"scratch/{parts[2]}")
-	return "+".join(sorted(mounts))
-
-
-def _pbs_fields(figure, run, hcfg, paths):
-	queue = hcfg["queues"][run.partition]
-	env = env_script(run, hcfg)
-	if run.ngpus and (run.nodes != 1 or run.ngpus > queue["ngpus"]):
-		raise SystemExit(f"{run.name}: ngpus is for one partial node (<= {queue['ngpus']} GPUs, nodes = 1)")
-	nodes = run.ngpus / queue["ngpus"] if run.ngpus else run.nodes  # fraction of a node for a partial-node job
-
-	def per_job(size):  # PBS mem/jobfs are per job: scale the per-node amount
-		return f"{int(int(size.rstrip('GB')) * nodes)}GB"
-
-	return {
-		"PROJECT": run.project or hcfg["project"],
-		"STORAGE": storage([hcfg["quokka"], env, *paths]),
-		"QUEUE": run.partition,
-		"JOB_NAME": f"{run.name}.{figure}"[:15],  # PBS limit
-		"NCPUS": str(int(queue["ncpus"] * nodes)),
-		"NTASKS": str(run.ntasks or queue["ncpus"] * run.nodes),  # CPU queues only; GPU jobs run one rank per GPU
-		"NGPUS": str(run.ngpus or queue["ngpus"] * run.nodes),
-		"MEM": per_job(queue["mem"]),
-		"JOBFS": per_job(queue["jobfs"]),
-		"TIME": run.time,
-		"ENV_SCRIPT": str(env),
-	}
-
-
-def _pbs(figure, run, hcfg, cmd, paths):
-	fields = {**_pbs_fields(figure, run, hcfg, paths), "COMMAND": shlex.join(cmd), "CHAIN": str(run.chain)}
-	return _fill("gadi-gpu.pbs" if hcfg["queues"][run.partition]["ngpus"] else "gadi-cpu.pbs", fields)
-
-
 def launch(rdir):
-	"""Submit (Setonix, Gadi) or start in the background (local). Records the job id / pid in run.json."""
+	"""Submit (Setonix) or start in the background (local). Records the job id / pid in run.json."""
 	meta = json.loads((rdir / "run.json").read_text())
 	if (rdir / "job.sbatch").exists():
 		out = subprocess.run(["sbatch", "--parsable", "job.sbatch"], cwd=rdir, capture_output=True, text=True, check=True)
 		meta["jobid"] = out.stdout.strip().split(";")[0]
-	elif (rdir / "job.pbs").exists():
-		out = subprocess.run(["qsub", "job.pbs"], cwd=rdir, capture_output=True, text=True, check=True)
-		meta["jobid"] = out.stdout.strip()
 	else:
 		proc = subprocess.Popen(["nohup", "bash", "launch.sh"], cwd=rdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 		meta["pid"] = proc.pid
@@ -324,18 +265,7 @@ def state(rdir):
 		alive = subprocess.run(["ps", "-p", str(meta["pid"])], capture_output=True).returncode == 0 if socket.gethostname() == meta["login_node"] else None
 		ran = "started" if (rdir / "run.log").exists() else "waiting"
 		return f"pid {meta['pid']} on {meta['login_node']}: " + ({True: f"batch running, run {ran}", False: "batch ended, run unfinished"}.get(alive, f"run {ran} (check on that node)"))
-	if "batch" in meta and "jobid" in meta and host() == "gadi":
-		out = subprocess.run(["qstat", "-x", "-f", meta["jobid"]], capture_output=True, text=True)
-		job_state = next((line.split("=")[1].strip() for line in out.stdout.splitlines() if "job_state" in line), "unknown")
-		return f"job {meta['jobid']}: {job_state}, run {'started' if (rdir / 'run.log').exists() else 'waiting'}"
-	if "jobid" in meta and (rdir / "job.pbs").exists():
-		# chained jobs log every start/exit/resubmission in chain.log
-		chain = (rdir / "chain.log").read_text().strip().splitlines() if (rdir / "chain.log").exists() else []
-		jobs = [meta["jobid"], *(line for line in chain if line.endswith(".gadi-pbs"))]
-		out = subprocess.run(["qstat", "-x", "-f", jobs[-1]], capture_output=True, text=True)
-		job_state = next((line.split("=")[1].strip() for line in out.stdout.splitlines() if "job_state" in line), "unknown")
-		return f"job {jobs[-1]} ({len(jobs)} in chain): {job_state}"
-	if "jobid" in meta and (rdir / "chain.log").exists():
+	if "jobid" in meta and (rdir / "chain.log").exists():  # chained jobs log every start/exit/resubmission in chain.log
 		chain = (rdir / "chain.log").read_text().strip().splitlines()
 		jobs = [meta["jobid"], *(line.split()[-1] for line in chain if line.startswith("Submitted batch job"))]
 		out = subprocess.run(["sacct", "-nX", "-j", jobs[-1], "-o", "State%20"], capture_output=True, text=True)

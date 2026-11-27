@@ -1,6 +1,6 @@
 #!/bin/bash
 # Create/update the Python venv for the figure scripts: ./setup_env.sh [VENV]  (default: .venv in this repo).
-# On Setonix and Gadi, load a Python module first (e.g. `module load cray-python/3.11.7` or `module load python3/3.12.1`).
+# On Setonix, load a Python module first (`module load cray-python/3.11.7`).
 set -euo pipefail
 cd "$(dirname "$0")"
 VENV=${1:-.venv}
